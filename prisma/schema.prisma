@@ -1,32 +1,227 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // If you use Neon pooled connections, you'll often set:
+  // url = env("DATABASE_URL_POOLED")
 }
 
-model User {
-  id    Int     @id @default(autoincrement())
-  email String  @unique
-  name  String?
-  posts Post[]
+enum GameStatus {
+  SCHEDULED
+  IN_PROGRESS
+  FINAL
+  CANCELED
+  POSTPONED
 }
 
-model Post {
+model Season {
   id        Int      @id @default(autoincrement())
+  year      Int      @unique
+  name      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  Int?
-  author    User?    @relation(fields: [authorId], references: [id])
+
+  teams           Team[]
+  players         Player[] // ✅ opposite of Player.season
+  games           Game[]
+  teamGameStats   TeamGameStat[] // ✅ opposite of TeamGameStat.season
+  playerGameStats PlayerGameStat[] // ✅ opposite of PlayerGameStat.season
+
+  @@index([year])
+}
+
+model Conference {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  shortName String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teams Team[]
+}
+
+model Team {
+  id             Int     @id @default(autoincrement())
+  seasonId       Int
+  conferenceId   Int?
+  ncaaTeamId     String? @unique // store NCAA/team source ID when you have it
+  name           String
+  shortName      String?
+  mascot         String?
+  abbr           String? // "DUKE", "UNC", etc.
+  primaryColor   String?
+  secondaryColor String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season     Season      @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  conference Conference? @relation(fields: [conferenceId], references: [id])
+
+  players   Player[]
+  homeGames Game[]   @relation("HomeTeam")
+  awayGames Game[]   @relation("AwayTeam")
+
+  teamGameStats   TeamGameStat[]
+  playerGameStats PlayerGameStat[]
+
+  @@unique([seasonId, name])
+  @@index([seasonId])
+  @@index([conferenceId])
+  @@index([ncaaTeamId])
+}
+
+model Player {
+  id           Int     @id @default(autoincrement())
+  seasonId     Int
+  teamId       Int
+  ncaaPlayerId String? @unique
+  firstName    String
+  lastName     String
+  fullName     String
+  position     String?
+  jersey       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  playerGameStats PlayerGameStat[]
+
+  @@unique([seasonId, teamId, fullName])
+  @@index([teamId])
+  @@index([seasonId])
+  @@index([ncaaPlayerId])
+}
+
+model Game {
+  id         Int     @id @default(autoincrement())
+  seasonId   Int
+  // external ids for ingest reconciliation (NCAA or other source)
+  ncaaGameId String? @unique
+
+  dateTime    DateTime
+  status      GameStatus @default(SCHEDULED)
+  neutralSite Boolean    @default(false)
+
+  homeTeamId Int
+  awayTeamId Int
+
+  // Scores (nullable until final)
+  homeScore Int?
+  awayScore Int?
+
+  venueName String?
+  city      String?
+  state     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  homeTeam Team   @relation("HomeTeam", fields: [homeTeamId], references: [id], onDelete: Restrict)
+  awayTeam Team   @relation("AwayTeam", fields: [awayTeamId], references: [id], onDelete: Restrict)
+
+  teamStats   TeamGameStat[]
+  playerStats PlayerGameStat[]
+
+  @@index([seasonId, dateTime])
+  @@index([homeTeamId, dateTime])
+  @@index([awayTeamId, dateTime])
+}
+
+model TeamGameStat {
+  id             Int @id @default(autoincrement())
+  seasonId       Int
+  gameId         Int
+  teamId         Int
+  opponentTeamId Int
+
+  isHome Boolean
+
+  // Core box score totals (keep nullable because sources vary)
+  points Int?
+  fgm    Int?
+  fga    Int?
+  fg3m   Int?
+  fg3a   Int?
+  ftm    Int?
+  fta    Int?
+
+  oreb Int?
+  dreb Int?
+  reb  Int?
+  ast  Int?
+  stl  Int?
+  blk  Int?
+  tov  Int?
+  pf   Int?
+
+  // Pace / efficiency helpers (can be computed later)
+  possessions Float?
+  offRtg      Float? // points per 100 poss
+  defRtg      Float?
+  efg         Float?
+  tovPct      Float?
+  orbPct      Float?
+  ftr         Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  game   Game   @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, teamId])
+  @@index([seasonId])
+  @@index([teamId])
+  @@index([opponentTeamId])
+  @@index([gameId])
+}
+
+model PlayerGameStat {
+  id       Int @id @default(autoincrement())
+  seasonId Int
+  gameId   Int
+  teamId   Int
+  playerId Int
+
+  minutes Int?
+
+  points Int?
+  fgm    Int?
+  fga    Int?
+  fg3m   Int?
+  fg3a   Int?
+  ftm    Int?
+  fta    Int?
+
+  oreb Int?
+  dreb Int?
+  reb  Int?
+  ast  Int?
+  stl  Int?
+  blk  Int?
+  tov  Int?
+  pf   Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  game   Game   @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([gameId, playerId])
+  @@index([seasonId])
+  @@index([gameId])
+  @@index([teamId])
+  @@index([playerId])
 }
